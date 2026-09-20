@@ -2,7 +2,7 @@
 
 A bright, offline sliding puzzle game for Android with number and personal-photo modes.
 
-Development is in progress on `v0.1.0-dev1`.
+Development is in progress on `v0.2.0-dev2`.
 
 Features planned for this first version:
 
