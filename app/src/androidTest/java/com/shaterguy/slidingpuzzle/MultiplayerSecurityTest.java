@@ -34,6 +34,20 @@ public class MultiplayerSecurityTest {
   while(SystemClock.elapsedRealtime()<deadline){if(expected.equals(session.state))return;Thread.sleep(20);}
   fail("timeout waiting for "+expected+" role="+session.role+" state="+session.state+" error="+session.errorMessage+" countdown="+session.countdown+" localReady="+session.localReady+" remoteReady="+session.remoteReady+" localStarted="+getField(session,"localStarted")+" remoteStarted="+getField(session,"remoteStarted")+" closing="+getField(session,"closing"));
  }
+ private static String peerDiag(MultiplayerSession session) throws Exception {
+  Object peer=getField(session,"peer");if(peer==null)return "peer=null";
+  Class<?> type=peer.getClass();
+  java.lang.reflect.Field sendSeq=type.getDeclaredField("sendSeq");sendSeq.setAccessible(true);
+  java.lang.reflect.Field recvSeq=type.getDeclaredField("recvSeq");recvSeq.setAccessible(true);
+  java.lang.reflect.Field peerSocket=type.getDeclaredField("socket");peerSocket.setAccessible(true);
+  java.net.Socket socket=(java.net.Socket)peerSocket.get(peer);
+  return "sendSeq="+sendSeq.getLong(peer)+" recvSeq="+recvSeq.getLong(peer)+" socketClosed="+socket.isClosed()+" inputShutdown="+socket.isInputShutdown()+" outputShutdown="+socket.isOutputShutdown();
+ }
+ private static String sessionDiag(MultiplayerSession session) throws Exception {
+  byte[] match=(byte[])getField(session,"matchId");boolean matchValid=MultiplayerProtocol.isValidId(match);String matchText=matchValid?MultiplayerProtocol.idHex(match).substring(0,8):"invalid";
+  String hash=session.configHash==null?"null":session.configHash.length()>=8?session.configHash.substring(0,8):session.configHash;
+  return "role="+session.role+" state="+session.state+" error="+session.errorMessage+" countdown="+session.countdown+" localReady="+session.localReady+" remoteReady="+session.remoteReady+" localStarted="+getField(session,"localStarted")+" remoteStarted="+getField(session,"remoteStarted")+" closing="+getField(session,"closing")+" match="+matchText+" config="+hash+" "+peerDiag(session);
+ }
  private static final class LivePair implements AutoCloseable {
   final MultiplayerSession host,guest;
   LivePair(Context context) throws Exception {
@@ -46,7 +60,16 @@ public class MultiplayerSecurityTest {
   void enterMatch() throws Exception {
    host.confirmPairing(true);guest.confirmPairing(true);awaitState(host,MultiplayerSession.HOST_SETUP,3000);awaitState(guest,MultiplayerSession.WAIT_CONFIG,3000);
    host.configure(3,"number",null,null);awaitState(host,MultiplayerSession.CONFIGURED,3000);awaitState(guest,MultiplayerSession.CONFIGURED,3000);assertEquals(host.configHash,guest.configHash);assertArrayEquals(host.localPuzzle.snapshot(),guest.localPuzzle.snapshot());
-   guest.ready();await("guest ready reaches host",3000,()->guest.localReady&&host.remoteReady);host.ready();awaitState(host,MultiplayerSession.MATCH,7000);awaitState(guest,MultiplayerSession.MATCH,7000);
+   guest.ready();await("guest ready reaches host",3000,()->guest.localReady&&host.remoteReady);host.ready();awaitMatch();
+  }
+  void awaitMatch() throws Exception {
+   long deadline=SystemClock.elapsedRealtime()+7000;
+   while(SystemClock.elapsedRealtime()<deadline){
+    if(MultiplayerSession.MATCH.equals(host.state)&&MultiplayerSession.MATCH.equals(guest.state))return;
+    if(Boolean.TRUE.equals(getField(host,"closing"))||Boolean.TRUE.equals(getField(guest,"closing")))break;
+    Thread.sleep(20);
+   }
+   fail("match diagnostic host={"+sessionDiag(host)+"} guest={"+sessionDiag(guest)+"}");
   }
   @Override public void close(){host.close();guest.close();}
  }
