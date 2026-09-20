@@ -146,18 +146,24 @@ final class MultiplayerSession {
 
  private void establish(Socket connected){
   if(closing||!MultiplayerProtocol.isValidId(sessionId)){try{connected.close();}catch(IOException ignored){}return;}socket=connected;stopDiscoveryOnly();
-  io.execute(()->{try{SecurePeer p=new SecurePeer(connected,HOST.equals(role),sessionId);connected.setSoTimeout(10000);p.handshake();connected.setSoTimeout(0);peer=p;sas=p.keys.sas;lastPeerTrafficAt=SystemClock.elapsedRealtime();setState(PAIRING,"양쪽 화면의 8자리 확인 코드를 비교해 주세요.");main.postDelayed(()->{synchronized(MultiplayerSession.this){if(PAIRING.equals(state)&&!closing)fail(DISCONNECTED,"연결 확인 시간이 지나 새로 연결해야 합니다.");}},60000);p.readLoop();if(!closing)fail(DISCONNECTED,"상대와의 연결이 끊겼습니다. 이번 대결은 승패 없이 종료되었습니다.");}
+  io.execute(()->{try{SecurePeer p=new SecurePeer(connected,HOST.equals(role),sessionId);connected.setSoTimeout(10000);p.handshake();connected.setSoTimeout(0);peer=p;sas=p.keys.sas;lastPeerTrafficAt=SystemClock.elapsedRealtime();setState(PAIRING,"양쪽 화면의 8자리 확인 코드를 비교해 주세요.");main.postDelayed(this::handlePairingTimeout,60000);p.readLoop();if(!closing)fail(DISCONNECTED,"상대와의 연결이 끊겼습니다. 이번 대결은 승패 없이 종료되었습니다.");}
    catch(GeneralSecurityException e){if(!closing)fail(CRYPTO_ERROR,"연결을 안전하게 확인할 수 없어 종료했습니다.");}
    catch(IOException|RuntimeException e){if(!closing)fail(PROTOCOL_ERROR,"받은 데이터를 확인할 수 없어 연결을 종료했습니다.");}});
  }
 
  synchronized void confirmPairing(boolean matches){
-  if(!PAIRING.equals(state)||peer==null)return;if(!matches){try{peer.send(MultiplayerProtocol.LEAVE,new byte[0]);}catch(Exception ignored){}fail(PAIRING_MISMATCH,"확인 코드가 다릅니다. 안전하게 연결을 종료했습니다.");return;}
-  if(localPaired)return;localPaired=true;try{peer.send(MultiplayerProtocol.PAIR_CONFIRM,new byte[0]);activateIfPaired();}catch(Exception e){fail(CRYPTO_ERROR,"연결 확인을 전송할 수 없어 종료했습니다.");}
+  if(!PAIRING.equals(state))return;
+  if(!matches){try{if(peer!=null)peer.send(MultiplayerProtocol.LEAVE,new byte[0]);}catch(Exception ignored){}fail(PAIRING_MISMATCH,"확인 코드가 다릅니다. 안전하게 연결을 종료했습니다.");return;}
+  if(peer==null||localPaired)return;localPaired=true;try{peer.send(MultiplayerProtocol.PAIR_CONFIRM,new byte[0]);activateIfPaired();}catch(Exception e){fail(CRYPTO_ERROR,"연결 확인을 전송할 수 없어 종료했습니다.");}
  }
+ synchronized void handlePairingTimeout(){if(PAIRING.equals(state)&&!closing)fail(DISCONNECTED,"연결 확인 시간이 지나 새로 연결해야 합니다.");}
  private synchronized void activateIfPaired(){if(localPaired&&remotePaired){setState(HOST.equals(role)?HOST_SETUP:WAIT_CONFIG,HOST.equals(role)?"대결 설정을 선택해 주세요.":"방장이 대결을 설정하는 중…");startHeartbeat();}}
  static boolean heartbeatExpired(long now,long last){return last>0&&now-last>HEARTBEAT_TIMEOUT_MS;}
- private synchronized void startHeartbeat(){if(heartbeatFuture!=null||closing)return;lastPeerTrafficAt=SystemClock.elapsedRealtime();heartbeatFuture=scheduler.scheduleAtFixedRate(()->{if(closing||peer==null)return;long now=SystemClock.elapsedRealtime();if(heartbeatExpired(now,lastPeerTrafficAt)){fail(DISCONNECTED,"상대 응답이 없어 연결을 종료했습니다. 이번 대결은 승패 없이 종료되었습니다.");return;}try{peer.send(MultiplayerProtocol.PING,new byte[0]);}catch(Exception e){fail(DISCONNECTED,"상대와의 연결을 확인할 수 없습니다. 이번 대결은 승패 없이 종료되었습니다.");}},HEARTBEAT_INTERVAL_MS,HEARTBEAT_INTERVAL_MS,TimeUnit.MILLISECONDS);}
+ synchronized boolean handleHeartbeatTimeout(long now){
+  if(closing||!heartbeatExpired(now,lastPeerTrafficAt))return false;fail(DISCONNECTED,"상대 응답이 없어 연결을 종료했습니다. 이번 대결은 승패 없이 종료되었습니다.");return true;
+ }
+ private synchronized void startHeartbeat(){if(heartbeatFuture!=null||closing)return;lastPeerTrafficAt=SystemClock.elapsedRealtime();heartbeatFuture=scheduler.scheduleAtFixedRate(()->{if(closing||peer==null)return;long now=SystemClock.elapsedRealtime();if(handleHeartbeatTimeout(now))return;try{peer.send(MultiplayerProtocol.PING,new byte[0]);}catch(Exception e){fail(DISCONNECTED,"상대와의 연결을 확인할 수 없습니다. 이번 대결은 승패 없이 종료되었습니다.");}},HEARTBEAT_INTERVAL_MS,HEARTBEAT_INTERVAL_MS,TimeUnit.MILLISECONDS);}
+
 
  void configure(int size,String mode,byte[] photoBytes,Bitmap hostBitmap){
   if(!HOST.equals(role)||!HOST_SETUP.equals(state)||peer==null)return;if(size<3||size>6||!("number".equals(mode)||"photo".equals(mode)))return;
@@ -248,8 +254,8 @@ final class MultiplayerSession {
  private void resetRound(){resetReadyAndResult();localPuzzle=null;remotePuzzle=null;configHash="";matchId=null;mode="number";size=3;if(photoBitmap!=null&&GUEST.equals(role)){photoBitmap.recycle();}photoBitmap=null;deletePhotoReceive();expectedPhotoBytes=0;receivedPhotoBytes=0;expectedPhotoWidth=0;expectedPhotoHeight=0;expectedPhotoHash="";}
 
  void externalError(String state,String message){fail(state,message);}
- void close(){if(closing)return;try{if(peer!=null)peer.send(MultiplayerProtocol.LEAVE,new byte[0]);}catch(Exception ignored){}closing=true;shutdownTransport();stopHeartbeat();deletePhotoReceive();io.shutdownNow();scheduler.shutdownNow();}
- private void fail(String state,String message){if(closing)return;this.state=state;this.errorMessage=message;closing=true;shutdownTransport();stopHeartbeat();deletePhotoReceive();io.shutdownNow();scheduler.shutdownNow();notifyChanged();}
+ void close(){if(closing)return;try{if(peer!=null)peer.send(MultiplayerProtocol.LEAVE,new byte[0]);}catch(Exception ignored){}closing=true;main.removeCallbacksAndMessages(null);shutdownTransport();stopHeartbeat();deletePhotoReceive();io.shutdownNow();scheduler.shutdownNow();}
+ private void fail(String state,String message){if(closing)return;this.state=state;this.errorMessage=message;closing=true;main.removeCallbacksAndMessages(null);shutdownTransport();stopHeartbeat();deletePhotoReceive();io.shutdownNow();scheduler.shutdownNow();notifyChanged();}
  private void setState(String state,String message){if(closing&&!(DISCONNECTED.equals(state)||PAIRING_MISMATCH.equals(state)||PROTOCOL_ERROR.equals(state)||CRYPTO_ERROR.equals(state)||PHOTO_TRANSFER_ERROR.equals(state)||PERMISSION_DENIED.equals(state)||P2P_UNSUPPORTED.equals(state)))return;this.state=state;this.errorMessage=message;notifyChanged();}
  private void notifyChanged(){Callback cb=callback;if(cb!=null)main.post(()->{Callback current=callback;if(current!=null)current.onChanged();});}
  private synchronized byte[] matchContextForSend(byte type) throws IOException {if(MultiplayerProtocol.sessionScopedType(type))return MultiplayerProtocol.SESSION_SCOPE_ID;if(!MultiplayerProtocol.isValidId(matchId))throw new IOException("missing match context");return Arrays.copyOf(matchId,matchId.length);}

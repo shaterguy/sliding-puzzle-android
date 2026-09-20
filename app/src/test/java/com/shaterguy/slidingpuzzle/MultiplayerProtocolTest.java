@@ -48,6 +48,12 @@ public class MultiplayerProtocolTest {
   try{MultiplayerProtocol.seal(p.host.sendKey,p.host.sendMarker,Long.MAX_VALUE,MultiplayerProtocol.READY,p.session,p.match,new byte[0]);fail("sequence exhaustion must fail");}catch(GeneralSecurityException expected){}
  }
 
+
+ @Test public void unsupportedProtocolVersionHelloIsRejected() throws Exception {
+  KeyPair pair=MultiplayerProtocol.newKeyPair();byte[] encoded=MultiplayerProtocol.encodeHello(pair.getPublic().getEncoded(),MultiplayerProtocol.newNonce(),MultiplayerProtocol.newId());ByteBuffer.wrap(encoded).putInt(4,MultiplayerProtocol.VERSION+1);
+  try{MultiplayerProtocol.decodeHello(encoded);fail("unsupported version must fail");}catch(IOException expected){}
+ }
+
  @Test public void configBindsExactSolvableBoard() throws Exception {
   Puzzle puzzle=Puzzle.restore(3,"1,2,3,4,5,6,7,0,8",0);String board=puzzle.encode();String hash=MultiplayerProtocol.configHash(3,"number",board,"");byte[] packed=MultiplayerProtocol.packConfig(3,"number",board,"",hash);MultiplayerProtocol.Config c=MultiplayerProtocol.unpackConfig(packed);assertEquals(3,c.size);assertEquals(board,c.board);assertEquals(hash,c.hash);assertTrue(Puzzle.restore(c.size,c.board,0).solvable());
  }

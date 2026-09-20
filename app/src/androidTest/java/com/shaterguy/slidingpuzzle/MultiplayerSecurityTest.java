@@ -17,6 +17,26 @@ public class MultiplayerSecurityTest {
   File file=File.createTempFile("multiplayer-test-",".jpg",context.getCacheDir());Bitmap bitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888);bitmap.eraseColor(0xff336699);try(FileOutputStream out=new FileOutputStream(file)){assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG,85,out));}finally{bitmap.recycle();}return file;
  }
 
+
+ private static java.lang.reflect.Field field(String name) throws Exception {java.lang.reflect.Field f=MultiplayerSession.class.getDeclaredField(name);f.setAccessible(true);return f;}
+ private static void setField(MultiplayerSession session,String name,Object value) throws Exception {field(name).set(session,value);}
+ private static Object getField(MultiplayerSession session,String name) throws Exception {return field(name).get(session);}
+ private static final class LifecycleResources {
+  final java.net.ServerSocket server;final java.net.Socket socket;final java.util.concurrent.ScheduledFuture<?> heartbeat;
+  LifecycleResources(java.net.ServerSocket server,java.net.Socket socket,java.util.concurrent.ScheduledFuture<?> heartbeat){this.server=server;this.socket=socket;this.heartbeat=heartbeat;}
+ }
+ private LifecycleResources attachLifecycleResources(MultiplayerSession session) throws Exception {
+  java.net.ServerSocket server=new java.net.ServerSocket(0);java.net.Socket socket=new java.net.Socket();setField(session,"server",server);setField(session,"socket",socket);
+  java.util.concurrent.ScheduledExecutorService scheduler=(java.util.concurrent.ScheduledExecutorService)getField(session,"scheduler");java.util.concurrent.ScheduledFuture<?> heartbeat=scheduler.schedule(()->{},5,java.util.concurrent.TimeUnit.MINUTES);setField(session,"heartbeatFuture",heartbeat);
+  setField(session,"discoveryListener",new android.net.nsd.NsdManager.DiscoveryListener(){public void onDiscoveryStarted(String t){}public void onStartDiscoveryFailed(String t,int c){}public void onStopDiscoveryFailed(String t,int c){}public void onDiscoveryStopped(String t){}public void onServiceFound(android.net.nsd.NsdServiceInfo i){}public void onServiceLost(android.net.nsd.NsdServiceInfo i){}});
+  setField(session,"registrationListener",new android.net.nsd.NsdManager.RegistrationListener(){public void onRegistrationFailed(android.net.nsd.NsdServiceInfo i,int c){}public void onUnregistrationFailed(android.net.nsd.NsdServiceInfo i,int c){}public void onServiceRegistered(android.net.nsd.NsdServiceInfo i){}public void onServiceUnregistered(android.net.nsd.NsdServiceInfo i){}});
+  setField(session,"p2pReceiver",new android.content.BroadcastReceiver(){public void onReceive(android.content.Context c,android.content.Intent i){}});
+  return new LifecycleResources(server,socket,heartbeat);
+ }
+ private void assertLifecycleReleased(MultiplayerSession session,LifecycleResources r) throws Exception {
+  assertTrue(r.server.isClosed());assertTrue(r.socket.isClosed());assertTrue(r.heartbeat.isCancelled());assertNull(getField(session,"server"));assertNull(getField(session,"socket"));assertNull(getField(session,"heartbeatFuture"));assertNull(getField(session,"discoveryListener"));assertNull(getField(session,"registrationListener"));assertNull(getField(session,"p2pReceiver"));assertTrue(((java.util.concurrent.ExecutorService)getField(session,"io")).isShutdown());assertTrue(((java.util.concurrent.ScheduledExecutorService)getField(session,"scheduler")).isShutdown());
+ }
+
  @Test public void boundedJpegValidatesHashAndDimensionsBeforeFullDecode() throws Exception {
   Context context=ApplicationProvider.getApplicationContext();File file=jpeg(context,32);try{String hash=MultiplayerProtocol.sha256Hex(file);Bitmap decoded=MultiplayerSession.decodeBoundedJpeg(file,(int)file.length(),hash,32,32);try{assertEquals(32,decoded.getWidth());assertEquals(32,decoded.getHeight());}finally{decoded.recycle();}}finally{file.delete();}
  }
@@ -35,4 +55,21 @@ public class MultiplayerSecurityTest {
  @Test public void staleMultiplayerCacheIsRemovedAtSessionStart() throws Exception {
   Context context=ApplicationProvider.getApplicationContext();File dir=new File(context.getCacheDir(),"multiplayer");assertTrue(dir.exists()||dir.mkdirs());File stale=new File(dir,"stale.jpg");try(FileOutputStream out=new FileOutputStream(stale)){out.write(7);}assertTrue(stale.exists());MultiplayerSession session=new MultiplayerSession(context);try{assertFalse(stale.exists());}finally{session.close();}
  }
+ @Test public void sasMismatchFailsClosedWithoutResultAndCleansLifecycle() throws Exception {
+  Context context=ApplicationProvider.getApplicationContext();MultiplayerSession session=new MultiplayerSession(context);LifecycleResources resources=attachLifecycleResources(session);session.state=MultiplayerSession.PAIRING;session.result="";session.confirmPairing(false);assertEquals(MultiplayerSession.PAIRING_MISMATCH,session.state);assertEquals("",session.result);assertLifecycleReleased(session,resources);
+ }
+
+ @Test public void pairingTimeoutFailsClosedWithoutWaitingAndCleansLifecycle() throws Exception {
+  Context context=ApplicationProvider.getApplicationContext();MultiplayerSession session=new MultiplayerSession(context);LifecycleResources resources=attachLifecycleResources(session);session.state=MultiplayerSession.PAIRING;session.result="";session.handlePairingTimeout();assertEquals(MultiplayerSession.DISCONNECTED,session.state);assertEquals("",session.result);assertLifecycleReleased(session,resources);
+ }
+
+ @Test public void heartbeatTimeoutUsesProductionFailurePathAndCleansLifecycle() throws Exception {
+  Context context=ApplicationProvider.getApplicationContext();MultiplayerSession session=new MultiplayerSession(context);LifecycleResources resources=attachLifecycleResources(session);session.state=MultiplayerSession.MATCH;session.result="";field("lastPeerTrafficAt").setLong(session,1L);assertTrue(session.handleHeartbeatTimeout(15002L));assertEquals(MultiplayerSession.DISCONNECTED,session.state);assertEquals("",session.result);assertLifecycleReleased(session,resources);
+ }
+
+ @Test public void userCloseIsNonResultAndIdempotentlyReleasesLifecycle() throws Exception {
+  Context context=ApplicationProvider.getApplicationContext();MultiplayerSession session=new MultiplayerSession(context);LifecycleResources resources=attachLifecycleResources(session);session.state=MultiplayerSession.MATCH;session.result="";session.close();session.close();assertEquals("",session.result);assertLifecycleReleased(session,resources);
+ }
+
+
 }
