@@ -59,6 +59,12 @@ jobs:
             exit 1
           fi
           echo "Persistent signer preflight PASS (${bytes} decoded bytes; alias verified)."
+      - name: Unit protocol/security tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:testDevDebugUnitTest
+
       - name: Build current and lower-version update fixture
         env:
           DEV_KEYSTORE_PATH: ${{ runner.temp }}/sliding-puzzle-dev.keystore
@@ -90,6 +96,18 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: API 26 multiplayer instrumentation
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 26
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            gradle --no-daemon :app:connectedDevDebugAndroidTest
+
       - name: In-place update and data preservation verification
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
@@ -101,6 +119,8 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
             set -eu
+            gradle --no-daemon :app:connectedDevDebugAndroidTest
+            adb uninstall "$DEV_PACKAGE" >/dev/null 2>&1 || true
             adb install staging/baseline.apk | tee runtime-evidence/install-baseline.txt
             adb shell dumpsys package "$DEV_PACKAGE" | grep -F 'versionCode=2' | tee runtime-evidence/baseline-version.txt
             adb shell am start -W -n "$DEV_PACKAGE/com.shaterguy.slidingpuzzle.MainActivity" | tee runtime-evidence/baseline-launch.txt
