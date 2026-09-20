@@ -37,12 +37,21 @@ final class MultiplayerSession {
   Room(String label,String transport,String address,int port,String deviceAddress,String sessionIdHex){this.label=label;this.transport=transport;this.address=address;this.port=port;this.deviceAddress=deviceAddress;this.sessionIdHex=sessionIdHex;}
  }
 
- private final Context context;private final Handler main=new Handler(Looper.getMainLooper());private final ExecutorService io=Executors.newCachedThreadPool();private final ScheduledExecutorService scheduler=Executors.newSingleThreadScheduledExecutor();
+ private static final class SerialExecutor {
+  private final Executor executor;private final ArrayDeque<Runnable> tasks=new ArrayDeque<>();private Runnable active;
+  SerialExecutor(Executor executor){this.executor=executor;}
+  synchronized boolean execute(Runnable command){tasks.offer(()->{try{command.run();}finally{finished();}});if(active!=null)return true;return scheduleNext();}
+  private synchronized void finished(){active=null;scheduleNext();}
+  private boolean scheduleNext(){Runnable next=tasks.poll();if(next==null)return true;active=next;try{executor.execute(next);return true;}catch(RejectedExecutionException rejected){active=null;tasks.clear();return false;}}
+  synchronized void clear(){tasks.clear();}
+ }
+
+ private final Context context;private final ExecutorService io=Executors.newCachedThreadPool();private final SerialExecutor outbound=new SerialExecutor(io);private final Handler main=new Handler(Looper.getMainLooper());private final ScheduledExecutorService scheduler=Executors.newSingleThreadScheduledExecutor();
  private volatile Callback callback;private final ArrayList<Room> rooms=new ArrayList<>();
  volatile String state=IDLE,role="",transport="",sas="",errorMessage="",mode="number",configHash="",result="";
  volatile int size=3,countdown=0;volatile boolean localReady=false,remoteReady=false,rematchRequested=false;
  volatile Puzzle localPuzzle,remotePuzzle;volatile Bitmap photoBitmap;volatile long matchStartedAt=0,matchEndedAt=0,localFinishAt=0,remoteFinishAt=0;
- private volatile boolean localPaired=false,remotePaired=false,closing=false,socketConnecting=false,resultScheduled=false,localStarted=false,remoteStarted=false;
+ private volatile boolean localPaired=false,remotePaired=false,closing=false,socketConnecting=false,resultScheduled=false,localStarted=false,remoteStarted=false;private boolean pairingSendPending=false,readySendPending=false,rematchSendPending=false;
  private volatile long lastPeerTrafficAt=0;private ScheduledFuture<?> heartbeatFuture;
  private SecurePeer peer;private Socket socket;private ServerSocket server;private byte[] sessionId,matchId;
  private int pendingDirectPort=0;
@@ -151,10 +160,16 @@ final class MultiplayerSession {
    catch(IOException|RuntimeException e){if(!closing)fail(PROTOCOL_ERROR,"받은 데이터를 확인할 수 없어 연결을 종료했습니다.");}});
  }
 
+ private boolean sendAsync(byte type,byte[] payload,String failureState,String failureMessage,Runnable onSuccess){
+  final byte[] body=payload==null?new byte[0]:Arrays.copyOf(payload,payload.length);
+  boolean accepted=outbound.execute(()->{try{SecurePeer target;synchronized(MultiplayerSession.this){if(closing)return;target=peer;}if(target==null)throw new IOException("peer unavailable");target.send(type,body);if(onSuccess!=null)synchronized(MultiplayerSession.this){if(!closing)onSuccess.run();}}catch(Exception e){fail(failureState,failureMessage);}});
+  if(!accepted&&!closing)fail(failureState,failureMessage);return accepted;
+ }
+
  synchronized void confirmPairing(boolean matches){
   if(!PAIRING.equals(state))return;
-  if(!matches){try{if(peer!=null)peer.send(MultiplayerProtocol.LEAVE,new byte[0]);}catch(Exception ignored){}fail(PAIRING_MISMATCH,"확인 코드가 다릅니다. 안전하게 연결을 종료했습니다.");return;}
-  if(peer==null||localPaired)return;localPaired=true;try{peer.send(MultiplayerProtocol.PAIR_CONFIRM,new byte[0]);activateIfPaired();}catch(Exception e){fail(CRYPTO_ERROR,"연결 확인을 전송할 수 없어 종료했습니다.");}
+  if(!matches){fail(PAIRING_MISMATCH,"확인 코드가 다릅니다. 안전하게 연결을 종료했습니다.");return;}
+  if(peer==null||localPaired||pairingSendPending)return;pairingSendPending=true;sendAsync(MultiplayerProtocol.PAIR_CONFIRM,new byte[0],CRYPTO_ERROR,"연결 확인을 전송할 수 없어 종료했습니다.",()->{pairingSendPending=false;localPaired=true;activateIfPaired();});
  }
  synchronized void handlePairingTimeout(){if(PAIRING.equals(state)&&!closing)fail(DISCONNECTED,"연결 확인 시간이 지나 새로 연결해야 합니다.");}
  private synchronized void activateIfPaired(){if(localPaired&&remotePaired){setState(HOST.equals(role)?HOST_SETUP:WAIT_CONFIG,HOST.equals(role)?"대결 설정을 선택해 주세요.":"방장이 대결을 설정하는 중…");startHeartbeat();}}
@@ -182,19 +197,19 @@ final class MultiplayerSession {
   }catch(Exception e){fail("photo".equals(mode)?PHOTO_TRANSFER_ERROR:PROTOCOL_ERROR,"대결 설정을 전송하지 못했습니다.");}});
  }
 
- synchronized void ready(){if(!(CONFIGURED.equals(state)||READY.equals(state))||peer==null||localReady||configHash.isEmpty()||!MultiplayerProtocol.isValidId(matchId))return;try{peer.send(MultiplayerProtocol.READY,MultiplayerProtocol.packString(configHash,64));localReady=true;setState(READY,remoteReady?"상대도 준비되었습니다.":"상대 준비를 기다리는 중…");maybeStart();}catch(Exception e){fail(PROTOCOL_ERROR,"준비 상태를 전송하지 못했습니다.");}}
- private synchronized void maybeStart(){if(!HOST.equals(role)||!localReady||!remoteReady||peer==null)return;try{peer.send(MultiplayerProtocol.START,MultiplayerProtocol.packString(configHash,64));startCountdown();}catch(Exception e){fail(PROTOCOL_ERROR,"대결 시작 신호를 전송하지 못했습니다.");}}
- private synchronized void startCountdown(){localStarted=false;remoteStarted=false;countdown=3;setState(COUNTDOWN,"3");for(int step=1;step<=3;step++){final int s=step;main.postDelayed(()->{synchronized(MultiplayerSession.this){if(!COUNTDOWN.equals(state)||closing)return;if(s<3){countdown=3-s;notifyChanged();}else{countdown=0;localStarted=true;try{peer.send(MultiplayerProtocol.STARTED,new byte[0]);maybeEnterMatch();}catch(Exception e){fail(PROTOCOL_ERROR,"대결 시작 확인을 전송하지 못했습니다.");}}}},step*1000L);}}
+ synchronized void ready(){if(!(CONFIGURED.equals(state)||READY.equals(state))||peer==null||localReady||readySendPending||configHash.isEmpty()||!MultiplayerProtocol.isValidId(matchId))return;readySendPending=true;byte[] payload;try{payload=MultiplayerProtocol.packString(configHash,64);}catch(Exception e){readySendPending=false;fail(PROTOCOL_ERROR,"준비 상태를 전송하지 못했습니다.");return;}sendAsync(MultiplayerProtocol.READY,payload,PROTOCOL_ERROR,"준비 상태를 전송하지 못했습니다.",()->{readySendPending=false;localReady=true;setState(READY,remoteReady?"상대도 준비되었습니다.":"상대 준비를 기다리는 중…");maybeStart();});}
+ private synchronized void maybeStart(){if(!HOST.equals(role)||!localReady||!remoteReady||peer==null)return;byte[] payload;try{payload=MultiplayerProtocol.packString(configHash,64);}catch(Exception e){fail(PROTOCOL_ERROR,"대결 시작 신호를 전송하지 못했습니다.");return;}sendAsync(MultiplayerProtocol.START,payload,PROTOCOL_ERROR,"대결 시작 신호를 전송하지 못했습니다.",this::startCountdown);}
+ private synchronized void startCountdown(){localStarted=false;remoteStarted=false;countdown=3;setState(COUNTDOWN,"3");for(int step=1;step<=3;step++){final int s=step;main.postDelayed(()->{synchronized(MultiplayerSession.this){if(!COUNTDOWN.equals(state)||closing)return;if(s<3){countdown=3-s;notifyChanged();}else{countdown=0;sendAsync(MultiplayerProtocol.STARTED,new byte[0],PROTOCOL_ERROR,"대결 시작 확인을 전송하지 못했습니다.",()->{localStarted=true;maybeEnterMatch();});}}},step*1000L);}}
  private synchronized void maybeEnterMatch(){if(COUNTDOWN.equals(state)&&localStarted&&remoteStarted){matchStartedAt=SystemClock.elapsedRealtime();setState(MATCH,"대결 중");}}
 
  synchronized boolean move(int index){
   if(!MATCH.equals(state)||localPuzzle==null||peer==null||!localPuzzle.adjacent(index)||localPuzzle.solved())return false;
-  if(!localPuzzle.move(index))return false;try{peer.send(MultiplayerProtocol.MOVE,MultiplayerProtocol.packMove(configHash,index));}catch(Exception e){fail(PROTOCOL_ERROR,"이동 정보를 전송하지 못했습니다.");return false;}
+  if(!localPuzzle.move(index))return false;byte[] payload;try{payload=MultiplayerProtocol.packMove(configHash,index);}catch(Exception e){fail(PROTOCOL_ERROR,"이동 정보를 전송하지 못했습니다.");return false;}if(!sendAsync(MultiplayerProtocol.MOVE,payload,PROTOCOL_ERROR,"이동 정보를 전송하지 못했습니다.",null))return false;
   if(localPuzzle.solved()){localFinishAt=SystemClock.elapsedRealtime();if(HOST.equals(role))scheduleResult();}return true;
  }
 
  synchronized void rematch(){
-  if(!RESULT.equals(state)||peer==null||!MultiplayerProtocol.isValidId(matchId))return;try{if(HOST.equals(role)){peer.send(MultiplayerProtocol.REMATCH,new byte[]{1});resetRound();setState(HOST_SETUP,"다음 대결 설정을 선택해 주세요.");}else{peer.send(MultiplayerProtocol.REMATCH,new byte[]{0});rematchRequested=true;notifyChanged();}}catch(Exception e){fail(PROTOCOL_ERROR,"재대결 요청을 전송하지 못했습니다.");}
+  if(!RESULT.equals(state)||peer==null||rematchSendPending||!MultiplayerProtocol.isValidId(matchId))return;boolean host=HOST.equals(role);rematchSendPending=true;sendAsync(MultiplayerProtocol.REMATCH,new byte[]{host?(byte)1:(byte)0},PROTOCOL_ERROR,"재대결 요청을 전송하지 못했습니다.",()->{rematchSendPending=false;if(host){resetRound();setState(HOST_SETUP,"다음 대결 설정을 선택해 주세요.");}else{rematchRequested=true;notifyChanged();}});
  }
 
  private void onMessage(MultiplayerProtocol.Decoded decoded) throws Exception {
@@ -245,17 +260,17 @@ final class MultiplayerSession {
  static boolean acceptsRemoteMove(String currentState,Puzzle remote){return MATCH.equals(currentState)&&remote!=null&&!remote.solved();}
  static boolean guestResultEvidenceValid(String code,Puzzle local,Puzzle remote){if(!MultiplayerProtocol.validResultCode(code)||local==null||remote==null)return false;if("HOST".equals(code))return remote.solved();if("GUEST".equals(code))return local.solved();return local.solved()&&remote.solved();}
  private void handleMove(byte[] payload) throws Exception {if(!acceptsRemoteMove(state,remotePuzzle))throw new IOException("move state");int index=MultiplayerProtocol.unpackMove(payload,configHash);if(!remotePuzzle.move(index))throw new IOException("illegal move");if(remotePuzzle.solved()){remoteFinishAt=SystemClock.elapsedRealtime();if(HOST.equals(role))scheduleResult();}notifyChanged();}
- private void scheduleResult(){if(resultScheduled)return;resultScheduled=true;main.postDelayed(()->{synchronized(MultiplayerSession.this){if(!HOST.equals(role)||RESULT.equals(state)||closing||!MATCH.equals(state))return;boolean local=localPuzzle!=null&&localPuzzle.solved(),remote=remotePuzzle!=null&&remotePuzzle.solved();if(!local&&!remote){resultScheduled=false;return;}String code;if(local&&remote&&Math.abs(localFinishAt-remoteFinishAt)<=TIE_WINDOW_MS)code="TIE";else if(local&&(!remote||localFinishAt<remoteFinishAt))code="HOST";else code="GUEST";try{peer.send(MultiplayerProtocol.RESULT,MultiplayerProtocol.packResult(configHash,code));applyResult(code);}catch(Exception e){fail(PROTOCOL_ERROR,"대결 결과를 전송하지 못했습니다.");}}},TIE_WINDOW_MS);}
+ private void scheduleResult(){if(resultScheduled)return;resultScheduled=true;main.postDelayed(()->{synchronized(MultiplayerSession.this){if(!HOST.equals(role)||RESULT.equals(state)||closing||!MATCH.equals(state))return;boolean local=localPuzzle!=null&&localPuzzle.solved(),remote=remotePuzzle!=null&&remotePuzzle.solved();if(!local&&!remote){resultScheduled=false;return;}String code;if(local&&remote&&Math.abs(localFinishAt-remoteFinishAt)<=TIE_WINDOW_MS)code="TIE";else if(local&&(!remote||localFinishAt<remoteFinishAt))code="HOST";else code="GUEST";byte[] payload;try{payload=MultiplayerProtocol.packResult(configHash,code);}catch(Exception e){fail(PROTOCOL_ERROR,"대결 결과를 전송하지 못했습니다.");return;}sendAsync(MultiplayerProtocol.RESULT,payload,PROTOCOL_ERROR,"대결 결과를 전송하지 못했습니다.",()->{try{applyResult(code);}catch(IOException e){fail(PROTOCOL_ERROR,"대결 결과를 전송하지 못했습니다.");}});}},TIE_WINDOW_MS);}
  private void handleResult(byte[] payload) throws Exception {if(!GUEST.equals(role)||!MATCH.equals(state)||localPuzzle==null||remotePuzzle==null)throw new IOException("result state");String[] pair=MultiplayerProtocol.unpackResult(payload,configHash);String code=pair[1];if(!guestResultEvidenceValid(code,localPuzzle,remotePuzzle))throw new IOException("false result");applyResult(code);}
  private void applyResult(String code) throws IOException {if(!MultiplayerProtocol.validResultCode(code))throw new IOException("result code");if(matchEndedAt==0)matchEndedAt=SystemClock.elapsedRealtime();if("TIE".equals(code))result="TIE";else if((HOST.equals(role)&&"HOST".equals(code))||(GUEST.equals(role)&&"GUEST".equals(code)))result="WIN";else result="LOSS";setState(RESULT,"WIN".equals(result)?"이겼어요!":"LOSS".equals(result)?"상대가 먼저 완성했어요":"동시에 완성했어요!");}
  private void handleRematch(byte[] payload) throws Exception {if(payload.length!=1||!RESULT.equals(state))throw new IOException("rematch state");if(HOST.equals(role)){if(payload[0]!=0)throw new IOException("rematch direction");rematchRequested=true;notifyChanged();}else{if(payload[0]!=1)throw new IOException("rematch direction");resetRound();setState(WAIT_CONFIG,"방장이 다음 대결을 설정하는 중…");}}
 
- private void resetReadyAndResult(){localReady=false;remoteReady=false;localStarted=false;remoteStarted=false;result="";rematchRequested=false;countdown=0;matchStartedAt=0;matchEndedAt=0;localFinishAt=0;remoteFinishAt=0;resultScheduled=false;}
+ private void resetReadyAndResult(){localReady=false;remoteReady=false;localStarted=false;remoteStarted=false;readySendPending=false;rematchSendPending=false;result="";rematchRequested=false;countdown=0;matchStartedAt=0;matchEndedAt=0;localFinishAt=0;remoteFinishAt=0;resultScheduled=false;}
  private void resetRound(){resetReadyAndResult();localPuzzle=null;remotePuzzle=null;configHash="";matchId=null;mode="number";size=3;if(photoBitmap!=null&&GUEST.equals(role)){photoBitmap.recycle();}photoBitmap=null;deletePhotoReceive();expectedPhotoBytes=0;receivedPhotoBytes=0;expectedPhotoWidth=0;expectedPhotoHeight=0;expectedPhotoHash="";}
 
  void externalError(String state,String message){fail(state,message);}
- void close(){if(closing)return;try{if(peer!=null)peer.send(MultiplayerProtocol.LEAVE,new byte[0]);}catch(Exception ignored){}closing=true;main.removeCallbacksAndMessages(null);shutdownTransport();stopHeartbeat();deletePhotoReceive();io.shutdownNow();scheduler.shutdownNow();}
- private void fail(String state,String message){if(closing)return;this.state=state;this.errorMessage=message;closing=true;main.removeCallbacksAndMessages(null);shutdownTransport();stopHeartbeat();deletePhotoReceive();io.shutdownNow();scheduler.shutdownNow();notifyChanged();}
+ void close(){if(closing)return;closing=true;main.removeCallbacksAndMessages(null);outbound.clear();shutdownTransport();stopHeartbeat();deletePhotoReceive();io.shutdownNow();scheduler.shutdownNow();}
+ private void fail(String state,String message){if(closing)return;this.state=state;this.errorMessage=message;closing=true;main.removeCallbacksAndMessages(null);outbound.clear();shutdownTransport();stopHeartbeat();deletePhotoReceive();io.shutdownNow();scheduler.shutdownNow();notifyChanged();}
  private void setState(String state,String message){if(closing&&!(DISCONNECTED.equals(state)||PAIRING_MISMATCH.equals(state)||PROTOCOL_ERROR.equals(state)||CRYPTO_ERROR.equals(state)||PHOTO_TRANSFER_ERROR.equals(state)||PERMISSION_DENIED.equals(state)||P2P_UNSUPPORTED.equals(state)))return;this.state=state;this.errorMessage=message;notifyChanged();}
  private void notifyChanged(){Callback cb=callback;if(cb!=null)main.post(()->{Callback current=callback;if(current!=null)current.onChanged();});}
  private synchronized byte[] matchContextForSend(byte type) throws IOException {if(MultiplayerProtocol.sessionScopedType(type))return MultiplayerProtocol.SESSION_SCOPE_ID;if(!MultiplayerProtocol.isValidId(matchId))throw new IOException("missing match context");return Arrays.copyOf(matchId,matchId.length);}
@@ -285,7 +300,7 @@ final class MultiplayerSession {
   }
   private void writeHandshake(byte[] data)throws IOException{synchronized(out){out.writeInt(data.length);out.write(data);out.flush();}}
   private MultiplayerProtocol.Hello readHandshake()throws IOException{int length=in.readInt();if(length<1||length>MultiplayerProtocol.MAX_HANDSHAKE)throw new IOException("handshake size");byte[] data=new byte[length];in.readFully(data);return MultiplayerProtocol.decodeHello(data);}
-  synchronized void send(byte type,byte[] payload)throws IOException,GeneralSecurityException {if(keys==null)throw new IOException("not secure");if(sendSeq<=0||sendSeq==Long.MAX_VALUE)throw new GeneralSecurityException("sequence exhausted");byte[] frame=MultiplayerProtocol.seal(keys.sendKey,keys.sendMarker,sendSeq,type,expectedSessionId,matchContextForSend(type),payload);sendSeq++;if(frame.length>MultiplayerProtocol.MAX_CONTROL+80)throw new IOException("frame too large");out.writeInt(frame.length);out.write(frame);out.flush();}
+  void send(byte type,byte[] payload)throws IOException,GeneralSecurityException {byte[] context=matchContextForSend(type);synchronized(this){if(keys==null)throw new IOException("not secure");if(sendSeq<=0||sendSeq==Long.MAX_VALUE)throw new GeneralSecurityException("sequence exhausted");byte[] frame=MultiplayerProtocol.seal(keys.sendKey,keys.sendMarker,sendSeq,type,expectedSessionId,context,payload);sendSeq++;if(frame.length>MultiplayerProtocol.MAX_CONTROL+80)throw new IOException("frame too large");out.writeInt(frame.length);out.write(frame);out.flush();}}
   void readLoop()throws IOException,GeneralSecurityException {while(!closing){int length;try{length=in.readInt();}catch(EOFException eof){return;}if(length<45||length>MultiplayerProtocol.MAX_CONTROL+80)throw new IOException("frame size");byte[] frame=new byte[length];in.readFully(frame);if(recvSeq<=0||recvSeq==Long.MAX_VALUE)throw new GeneralSecurityException("sequence exhausted");MultiplayerProtocol.Decoded decoded=MultiplayerProtocol.open(keys.recvKey,keys.recvMarker,recvSeq,expectedSessionId,null,frame);recvSeq++;lastPeerTrafficAt=SystemClock.elapsedRealtime();try{onMessage(decoded);}catch(GeneralSecurityException e){throw e;}catch(IOException e){throw e;}catch(Exception e){throw new IOException("message",e);}}}
  }
 }
