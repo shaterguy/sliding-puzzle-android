@@ -12,3 +12,5 @@ Features planned for this first version:
 - Swipe movement, optional tap movement, and a completion celebration.
 
 Photo processing and storage stay on the device.
+
+- 서버 없이 Wi‑Fi Direct 또는 같은 Wi‑Fi로 두 기기 멀티 대결을 지원합니다.

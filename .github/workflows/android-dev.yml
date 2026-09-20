@@ -1,17 +1,17 @@
 name: Android persistent DEV APK
 on:
   push:
-    branches: ['v0.1.0-dev*']
+    branches: ['v0.2.0-dev*']
 permissions:
   contents: read
 concurrency:
   group: sliding-puzzle-dev-${{ github.ref }}
   cancel-in-progress: false
 env:
-  DEV_VERSION: 0.1.0-dev2
-  DEV_VERSION_CODE: '2'
+  DEV_VERSION: 0.2.0-dev2
+  DEV_VERSION_CODE: '3'
   DEV_PACKAGE: com.shaterguy.slidingpuzzle.dev
-  DEV_APK: Sliding-Puzzle-0.1.0-dev2.apk
+  DEV_APK: Sliding-Puzzle-0.2.0-dev2.apk
   KEYSTORE_FILE: sliding-puzzle-dev.keystore
 jobs:
   package-and-update-test:
@@ -71,7 +71,7 @@ jobs:
           mkdir -p staging delivery runtime-evidence
           gradle --no-daemon :app:assembleDevDebug
           cp app/build/outputs/apk/dev/debug/app-dev-debug.apk staging/current.apk
-          gradle --no-daemon :app:assembleDevDebug -PappVersionCode=1
+          gradle --no-daemon :app:assembleDevDebug -PappVersionCode=2
           cp app/build/outputs/apk/dev/debug/app-dev-debug.apk staging/baseline.apk
           tools="$ANDROID_HOME/build-tools/35.0.0"
           "$tools/apksigner" verify --verbose --print-certs staging/current.apk > delivery/signature.txt
@@ -102,7 +102,7 @@ jobs:
           script: |
             set -eu
             adb install staging/baseline.apk | tee runtime-evidence/install-baseline.txt
-            adb shell dumpsys package "$DEV_PACKAGE" | grep -F 'versionCode=1' | tee runtime-evidence/baseline-version.txt
+            adb shell dumpsys package "$DEV_PACKAGE" | grep -F 'versionCode=2' | tee runtime-evidence/baseline-version.txt
             adb shell am start -W -n "$DEV_PACKAGE/com.shaterguy.slidingpuzzle.MainActivity" | tee runtime-evidence/baseline-launch.txt
             adb shell run-as "$DEV_PACKAGE" mkdir files || true
             adb shell run-as "$DEV_PACKAGE" touch files/update-lineage.txt
@@ -112,7 +112,7 @@ jobs:
             adb shell am start -W -n "$DEV_PACKAGE/com.shaterguy.slidingpuzzle.MainActivity" | tee runtime-evidence/current-launch.txt
             sleep 1
             adb exec-out screencap -p > runtime-evidence/home.png
-            printf 'package=%s\nbaseline_version_code=1\ncurrent_version_code=%s\nsame_signer=PASS\nin_place_update=PASS\ndata_preserved=PASS\n' "$DEV_PACKAGE" "$DEV_VERSION_CODE" > runtime-evidence/UPDATE_TEST.txt
+            printf 'package=%s\nbaseline_version_code=2\ncurrent_version_code=%s\nsame_signer=PASS\nin_place_update=PASS\ndata_preserved=PASS\n' "$DEV_PACKAGE" "$DEV_VERSION_CODE" > runtime-evidence/UPDATE_TEST.txt
       - name: Lock canonical APK identity
         shell: bash
         run: |

@@ -100,6 +100,7 @@ public class MainActivity extends Activity {
   Button photo=button("▧   사진 퍼즐",102,()->{s.mode="photo";s.screen="prepare";save();render();});
   if(s.mode.equals("number"))primary(number);else primary(photo);content.addView(number);content.addView(photo);
   sizes();Button start=button("숫자 퍼즐 시작",103,()->{s.mode="number";s.photo="";s.bitmap=null;startGame();});primary(start);content.addView(start);
+  content.addView(button("친구와 멀티 대결",120,()->startActivity(new Intent(this,MultiplayerActivity.class))));
   content.addView(button("설정",104,this::settings));
   content.addView(text("빈칸 옆 조각을 빈칸 쪽으로 밀어 보세요.\n설정에서 터치 이동도 켤 수 있어요.",15));
  }
