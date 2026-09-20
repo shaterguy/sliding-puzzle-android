@@ -118,7 +118,7 @@ final class MultiplayerSession {
 
  private void establish(Socket connected){
   if(closing){try{connected.close();}catch(IOException ignored){}return;}socket=connected;stopDiscoveryOnly();
-  io.execute(()->{try{SecurePeer p=new SecurePeer(connected,HOST.equals(role));p.handshake();peer=p;sas=p.keys.sas;setState(PAIRING,"양쪽 화면의 8자리 확인 코드를 비교해 주세요.");p.readLoop();if(!closing)fail(DISCONNECTED,"상대와의 연결이 끊겼습니다. 이번 대결은 승패 없이 종료되었습니다.");}
+  io.execute(()->{try{SecurePeer p=new SecurePeer(connected,HOST.equals(role));connected.setSoTimeout(10000);p.handshake();connected.setSoTimeout(0);peer=p;sas=p.keys.sas;setState(PAIRING,"양쪽 화면의 8자리 확인 코드를 비교해 주세요.");main.postDelayed(()->{synchronized(MultiplayerSession.this){if(PAIRING.equals(state)&&!closing)fail(DISCONNECTED,"연결 확인 시간이 지나 새로 연결해야 합니다.");}},60000);p.readLoop();if(!closing)fail(DISCONNECTED,"상대와의 연결이 끊겼습니다. 이번 대결은 승패 없이 종료되었습니다.");}
    catch(GeneralSecurityException e){if(!closing)fail(CRYPTO_ERROR,"연결을 안전하게 확인할 수 없어 종료했습니다.");}
    catch(IOException|RuntimeException e){if(!closing)fail(PROTOCOL_ERROR,"받은 데이터를 확인할 수 없어 연결을 종료했습니다.");}});
  }

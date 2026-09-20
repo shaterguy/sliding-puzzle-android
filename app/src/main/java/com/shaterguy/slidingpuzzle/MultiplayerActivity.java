@@ -77,9 +77,10 @@ public final class MultiplayerActivity extends Activity implements MultiplayerSe
  private void requestDirectIfNeeded(){
   String permission=Build.VERSION.SDK_INT>=33?Manifest.permission.NEARBY_WIFI_DEVICES:Manifest.permission.ACCESS_FINE_LOCATION;
   if(checkSelfPermission(permission)!=PackageManager.PERMISSION_GRANTED){r.pendingDirectRole=r.role;requestPermissions(new String[]{permission},REQ_DIRECT);return;}
-  LocationManager lm=(LocationManager)getSystemService(LOCATION_SERVICE);if(lm!=null&&!lm.isLocationEnabled()){showLocationRequired();return;}
+  if(!locationEnabled()){showLocationRequired();return;}
   startTransport(MultiplayerSession.DIRECT);
  }
+ private boolean locationEnabled(){LocationManager lm=(LocationManager)getSystemService(LOCATION_SERVICE);if(lm==null)return false;if(Build.VERSION.SDK_INT>=28)return lm.isLocationEnabled();try{return Settings.Secure.getInt(getContentResolver(),Settings.Secure.LOCATION_MODE)!=Settings.Secure.LOCATION_MODE_OFF;}catch(Settings.SettingNotFoundException e){return false;}}
  private void showLocationRequired(){new AlertDialog.Builder(this).setTitle("기기 설정이 필요합니다").setMessage("Wi‑Fi Direct로 가까운 기기를 찾으려면 기기의 위치 기능이 켜져 있어야 합니다. 앱은 위치값을 저장하거나 전송하지 않습니다.").setNegativeButton("같은 Wi‑Fi 사용",(d,w)->startTransport(MultiplayerSession.LAN)).setPositiveButton("기기 설정 열기",(d,w)->{try{startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));}catch(ActivityNotFoundException ignored){}}).show();}
  private void startTransport(String transport){if(MultiplayerSession.HOST.equals(r.role))r.engine.startHost(transport);else r.engine.startGuest(transport);}
  @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] grants){super.onRequestPermissionsResult(request,permissions,grants);if(request!=REQ_DIRECT)return;if(grants.length>0&&grants[0]==PackageManager.PERMISSION_GRANTED){requestDirectIfNeeded();}else{r.engine.externalError(MultiplayerSession.PERMISSION_DENIED,"주변 기기 권한이 없어 직접 연결할 수 없습니다.");}}
