@@ -1,0 +1,6 @@
+package=com.shaterguy.slidingpuzzle.dev
+baseline_version_code=2
+current_version_code=3
+same_signer=PASS
+in_place_update=PASS
+data_preserved=PASS
