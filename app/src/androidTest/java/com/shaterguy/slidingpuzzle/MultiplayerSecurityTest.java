@@ -29,7 +29,11 @@ public class MultiplayerSecurityTest {
   while(SystemClock.elapsedRealtime()<deadline){if(condition.done())return;Thread.sleep(20);}
   fail("timeout waiting for "+label);
  }
- private static void awaitState(MultiplayerSession session,String expected,long timeoutMs) throws Exception {await(expected,timeoutMs,()->expected.equals(session.state));}
+ private static void awaitState(MultiplayerSession session,String expected,long timeoutMs) throws Exception {
+  long deadline=SystemClock.elapsedRealtime()+timeoutMs;
+  while(SystemClock.elapsedRealtime()<deadline){if(expected.equals(session.state))return;Thread.sleep(20);}
+  fail("timeout waiting for "+expected+" role="+session.role+" state="+session.state+" error="+session.errorMessage+" countdown="+session.countdown+" localReady="+session.localReady+" remoteReady="+session.remoteReady+" localStarted="+getField(session,"localStarted")+" remoteStarted="+getField(session,"remoteStarted")+" closing="+getField(session,"closing"));
+ }
  private static final class LivePair implements AutoCloseable {
   final MultiplayerSession host,guest;
   LivePair(Context context) throws Exception {
