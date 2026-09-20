@@ -1,0 +1,17 @@
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): false
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: CN=Sliding Puzzle DEV, O=SHaterguy, C=KR
+Signer #1 certificate SHA-256 digest: 84f40f4d1343540040f060ac923c83520c46cae81111b7871fec0e59655c8277
+Signer #1 certificate SHA-1 digest: 9bbb249522ecd6f87456c668441a372ae8db8946
+Signer #1 certificate MD5 digest: e8c67839d5ef0b33eefb7fac30261f0d
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 3072
+Signer #1 public key SHA-256 digest: edd6e9a5323e202c2eaab94a09acdbd6cf95ce24ccf728fb981a47c5ff79eaac
+Signer #1 public key SHA-1 digest: 19e6caccfed9256a77126cd3fabea02a71d9c69c
+Signer #1 public key MD5 digest: c856c73a5448e9b7bea9d4942ed0558e
