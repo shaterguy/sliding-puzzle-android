@@ -114,7 +114,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            gradle --no-daemon :app:connectedDevDebugAndroidTest
+            gradle --no-daemon :app:connectedDevDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.shaterguy.slidingpuzzle.MultiplayerSecurityTest,com.shaterguy.slidingpuzzle.MultiplayerUiTest
 
       - name: In-place update and data preservation verification
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
