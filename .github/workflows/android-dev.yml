@@ -8,11 +8,15 @@ concurrency:
   group: sliding-puzzle-dev-${{ github.ref }}
   cancel-in-progress: false
 env:
-  DEV_VERSION: 0.2.0-dev2
+  DEV_VERSION: 0.2.0-dev1
   DEV_VERSION_CODE: '3'
   DEV_PACKAGE: com.shaterguy.slidingpuzzle.dev
-  DEV_APK: Sliding-Puzzle-0.2.0-dev2.apk
+  DEV_APK: Sliding-Puzzle-0.2.0-dev1.apk
   KEYSTORE_FILE: sliding-puzzle-dev.keystore
+  BASELINE_DEV_VERSION: 0.1.0-dev2
+  BASELINE_SOURCE_SHA: c92150f828a0d3312d83d5ecb728857b79b447fb
+  BASELINE_APK_SHA256: a8dbc3d23b6d9fd095ddbe637200ebf63788ca15681ec9d7434d8677c2a711fd
+  BASELINE_APK_URL: https://raw.githubusercontent.com/shaterguy/sliding-puzzle-android/delivery/dev-lineage/dist/0.1.0-dev2/c92150f828a0d3312d83d5ecb728857b79b447fb/34099225862-1/Sliding-Puzzle-0.1.0-dev2.apk
 jobs:
   package-and-update-test:
     runs-on: ubuntu-latest
@@ -65,7 +69,7 @@ jobs:
           set -euo pipefail
           gradle --no-daemon :app:testDevDebugUnitTest
 
-      - name: Build current and lower-version update fixture
+      - name: Build current and fetch canonical previous DEV
         env:
           DEV_KEYSTORE_PATH: ${{ runner.temp }}/sliding-puzzle-dev.keystore
           DEV_KEYSTORE_PASSWORD: android
@@ -77,8 +81,8 @@ jobs:
           mkdir -p staging delivery runtime-evidence
           gradle --no-daemon :app:assembleDevDebug
           cp app/build/outputs/apk/dev/debug/app-dev-debug.apk staging/current.apk
-          gradle --no-daemon :app:assembleDevDebug -PappVersionCode=2
-          cp app/build/outputs/apk/dev/debug/app-dev-debug.apk staging/baseline.apk
+          curl --fail --location --silent --show-error "$BASELINE_APK_URL" -o staging/baseline.apk
+          printf '%s  %s\n' "$BASELINE_APK_SHA256" staging/baseline.apk | sha256sum --check -
           tools="$ANDROID_HOME/build-tools/35.0.0"
           "$tools/apksigner" verify --verbose --print-certs staging/current.apk > delivery/signature.txt
           "$tools/apksigner" verify --verbose --print-certs staging/baseline.apk > staging/baseline-signature.txt
@@ -90,6 +94,10 @@ jobs:
           grep -F "package: name='$DEV_PACKAGE'" delivery/package.txt
           grep -F "versionCode='$DEV_VERSION_CODE'" delivery/package.txt
           grep -F "versionName='$DEV_VERSION'" delivery/package.txt
+          "$tools/aapt" dump badging staging/baseline.apk > staging/baseline-package.txt
+          grep -F "package: name='$DEV_PACKAGE'" staging/baseline-package.txt
+          grep -F "versionCode='2'" staging/baseline-package.txt
+          grep -F "versionName='$BASELINE_DEV_VERSION'" staging/baseline-package.txt
           cp staging/current.apk "delivery/$DEV_APK"
       - name: Enable emulator acceleration
         run: |
@@ -142,7 +150,7 @@ jobs:
           cert=$(grep -F 'Signer #1 certificate SHA-256 digest:' delivery/signature.txt | head -1 | sed 's/.*: //')
           cd delivery
           sha256sum "$DEV_APK" > SHA256SUMS
-          printf 'source_sha=%s\nrun_id=%s\nrun_attempt=%s\nchannel=DEV\nversion=%s\nversion_code=%s\npackage=%s\nsigner_cert_sha256=%s\nupdate_test=PASS\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$DEV_VERSION" "$DEV_VERSION_CODE" "$DEV_PACKAGE" "$cert" > BUILD_IDENTITY.txt
+          printf 'source_sha=%s\nrun_id=%s\nrun_attempt=%s\nchannel=DEV\nversion=%s\nversion_code=%s\npackage=%s\nsigner_cert_sha256=%s\nbaseline_version=%s\nbaseline_version_code=2\nbaseline_source_sha=%s\nbaseline_apk_sha256=%s\nupdate_test=PASS\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$DEV_VERSION" "$DEV_VERSION_CODE" "$DEV_PACKAGE" "$cert" "$BASELINE_DEV_VERSION" "$BASELINE_SOURCE_SHA" "$BASELINE_APK_SHA256" > BUILD_IDENTITY.txt
       - name: Canonical verified APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

@@ -14,7 +14,7 @@ android {
  }
  flavorDimensions += 'channel'
  productFlavors {
-  dev { dimension 'channel'; applicationIdSuffix '.dev'; versionNameSuffix '-dev2'; resValue 'string', 'app_name', '슬라이딩 퍼즐 DEV' }
+  dev { dimension 'channel'; applicationIdSuffix '.dev'; versionNameSuffix '-dev1'; resValue 'string', 'app_name', '슬라이딩 퍼즐 DEV' }
   production { dimension 'channel'; resValue 'string', 'app_name', '슬라이딩 퍼즐' }
  }
  signingConfigs {
